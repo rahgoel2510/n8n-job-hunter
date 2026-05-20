@@ -1,0 +1,140 @@
+{
+  "name": "Job Hunter Pipeline - Rahul Goel",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 12 }]
+        }
+      },
+      "id": "trigger-1",
+      "name": "Every 12 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const queries = [\n  'Staff TPM India',\n  'Senior TPM India',\n  'Engineering Program Manager India',\n  'GenAI Program Manager India',\n  'Principal Program Manager India'\n];\n\nconst sources = ['indeed', 'linkedin'];\nconst jobs = [];\nconst seen = new Set();\n\nfor (const source of sources) {\n  for (const query of queries) {\n    let url;\n    if (source === 'indeed') {\n      url = `https://www.indeed.co.in/jobs?q=${encodeURIComponent(query)}&l=India&sort=date&fromage=1`;\n    } else {\n      url = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=India&f_TPR=r86400`;\n    }\n    \n    try {\n      const response = await this.helpers.httpRequest({\n        method: 'GET',\n        url: url,\n        headers: {\n          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'\n        },\n        timeout: 15000\n      });\n      \n      const html = response;\n      let matches;\n      \n      if (source === 'indeed') {\n        const regex = /data-jk=\"([^\"]+)\"[\\s\\S]*?<h2[^>]*>\\s*<a[^>]*>\\s*<span[^>]*>([^<]+)<\\/span>[\\s\\S]*?<span[^>]*data-testid=\"company-name\"[^>]*>([^<]+)<\\/span>/g;\n        while ((matches = regex.exec(html)) !== null) {\n          const id = `indeed_${matches[1]}`;\n          if (!seen.has(id)) {\n            seen.add(id);\n            jobs.push({\n              id,\n              source: 'indeed',\n              title: matches[2].trim(),\n              company: matches[3].trim(),\n              url: `https://www.indeed.co.in/viewjob?jk=${matches[1]}`,\n              query,\n              scraped_at: new Date().toISOString()\n            });\n          }\n        }\n      } else {\n        const regex = /data-entity-urn=\"urn:li:jobPosting:(\\d+)\"[\\s\\S]*?<span[^>]*>([^<]+)<\\/span>[\\s\\S]*?<h4[^>]*>([^<]+)<\\/h4>/g;\n        while ((matches = regex.exec(html)) !== null) {\n          const id = `linkedin_${matches[1]}`;\n          if (!seen.has(id)) {\n            seen.add(id);\n            jobs.push({\n              id,\n              source: 'linkedin',\n              title: matches[2].trim(),\n              company: matches[3].trim(),\n              url: `https://www.linkedin.com/jobs/view/${matches[1]}`,\n              query,\n              scraped_at: new Date().toISOString()\n            });\n          }\n        }\n      }\n    } catch (e) {\n      // Continue on error\n    }\n  }\n}\n\nreturn jobs.map(j => ({ json: j }));"
+      },
+      "id": "scrape-1",
+      "name": "Scrape Job Boards",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nif (items.length === 0) {\n  return [{ json: { empty: true, message: 'No jobs found this run' } }];\n}\nreturn items;"
+      },
+      "id": "filter-empty-1",
+      "name": "Check Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $input.item.json;\nif (job.empty) return [{ json: job }];\n\nlet jdText = '';\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: job.url,\n    headers: {\n      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'\n    },\n    timeout: 15000\n  });\n  // Extract text content, strip HTML\n  jdText = response.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').substring(0, 3000);\n} catch (e) {\n  jdText = `Title: ${job.title}, Company: ${job.company}`;\n}\n\nreturn [{ json: { ...job, jd_text: jdText } }];"
+      },
+      "id": "fetch-jd-1",
+      "name": "Fetch JD Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $input.item.json;\nif (job.empty) return [{ json: job }];\n\nconst profile = `Rahul Goel - Staff TPM, 20 years experience.\nRecent: Amazon India - $165M AWS portfolio, GDPR compliance, GenAI delivery (AskGenie 88% autonomous resolution, Procurement Advisor $2.3M ROI), $5.3B Capital Planning, $8M FinOps savings, EagleEye observability (Datadog, Prometheus), 10+ Senior Engineers managed.\nPrior: Deloitte Digital 7 years 45-member teams, Marketo Engage ML automation 2.5x ROI.\nTech: AWS, Bedrock Agents, RAG, LLMOps, LangChain, OAuth 2.0, GDPR, SOC2, Datadog, Terraform, Kubernetes, Docker, Java, Python, SQL, Agile, SAFe, OKR, JIRA.\nCerts: PMP, AWS Solutions Architect, Google Cloud Gen AI Leader.`;\n\nconst prompt = `You are a job fitment scoring engine. Score how well this candidate matches the job.\n\nCandidate Profile:\n${profile}\n\nJob:\nTitle: ${job.title}\nCompany: ${job.company}\nDescription: ${job.jd_text}\n\nRespond in EXACTLY this JSON format (no markdown, no explanation):\n{\"score\": <0-100>, \"top_matches\": [\"match1\", \"match2\", \"match3\"], \"gaps\": [\"gap1\", \"gap2\"], \"resume_version\": \"<Saviynt-focused if role emphasizes security/compliance/IAM, otherwise Guidewire-focused>\"}`;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://api.anthropic.com/v1/messages',\n    headers: {\n      'Content-Type': 'application/json',\n      'x-api-key': $env.ANTHROPIC_API_KEY,\n      'anthropic-version': '2023-06-01'\n    },\n    body: {\n      model: 'claude-3-haiku-20240307',\n      max_tokens: 300,\n      messages: [{ role: 'user', content: prompt }]\n    },\n    timeout: 30000\n  });\n  \n  const text = response.content[0].text;\n  const scoring = JSON.parse(text);\n  return [{ json: { ...job, ...scoring } }];\n} catch (e) {\n  return [{ json: { ...job, score: 0, top_matches: [], gaps: ['Scoring failed'], resume_version: 'Guidewire-focused', error: e.message } }];\n}"
+      },
+      "id": "score-1",
+      "name": "Score Fitment (Claude Haiku)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const job = $input.item.json;\nif (job.empty || job.score >= 72) {\n  return [{ json: job }];\n}\nreturn [];"
+      },
+      "id": "filter-1",
+      "name": "Filter >= 72% Fitment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const jobs = $input.all().map(i => i.json).filter(j => !j.empty);\n\nif (jobs.length === 0) {\n  return [{ json: { html: '<p>No matching jobs found this run (all below 72% fitment).</p>', count: 0 } }];\n}\n\njobs.sort((a, b) => b.score - a.score);\n\nconst rows = jobs.map(j => `\n  <tr>\n    <td style=\"padding:8px;border:1px solid #ddd;font-weight:bold;color:#1a73e8\">${j.score}%</td>\n    <td style=\"padding:8px;border:1px solid #ddd\">${j.company}</td>\n    <td style=\"padding:8px;border:1px solid #ddd\"><a href=\"${j.url}\">${j.title}</a></td>\n    <td style=\"padding:8px;border:1px solid #ddd\">${(j.top_matches || []).join(', ')}</td>\n    <td style=\"padding:8px;border:1px solid #ddd;color:#d93025\">${(j.gaps || []).join(', ')}</td>\n    <td style=\"padding:8px;border:1px solid #ddd\">${j.resume_version || 'Guidewire-focused'}</td>\n  </tr>`).join('');\n\nconst html = `\n<h2 style=\"color:#1a73e8\">🎯 Job Hunter Digest - ${new Date().toLocaleDateString('en-IN')}</h2>\n<p>${jobs.length} roles matched (≥72% fitment)</p>\n<table style=\"border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:14px\">\n  <tr style=\"background:#1a73e8;color:white\">\n    <th style=\"padding:8px;border:1px solid #ddd\">Score</th>\n    <th style=\"padding:8px;border:1px solid #ddd\">Company</th>\n    <th style=\"padding:8px;border:1px solid #ddd\">Title</th>\n    <th style=\"padding:8px;border:1px solid #ddd\">Top Matches</th>\n    <th style=\"padding:8px;border:1px solid #ddd\">Gaps</th>\n    <th style=\"padding:8px;border:1px solid #ddd\">Resume</th>\n  </tr>\n  ${rows}\n</table>\n<p style=\"color:#666;font-size:12px\">Generated by n8n-job-hunter | ${new Date().toISOString()}</p>`;\n\nreturn [{ json: { html, count: jobs.length } }];"
+      },
+      "id": "digest-1",
+      "name": "Build HTML Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.SMTP_FROM }}",
+        "toEmail": "={{ $env.SMTP_TO }}",
+        "subject": "=🎯 Job Hunter: {{ $json.count }} roles matched - {{ new Date().toLocaleDateString('en-IN') }}",
+        "emailType": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "email-1",
+      "name": "Send Email Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1740, 300],
+      "credentials": {
+        "smtp": {
+          "id": "1",
+          "name": "Outlook SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const jobs = $input.all().map(i => i.json).filter(j => !j.empty && j.score);\nconst fs = require('fs');\nconst outDir = '/home/node/outputs';\nconst date = new Date().toISOString().split('T')[0];\nconst file = `${outDir}/jobs_${date}.json`;\n\nlet existing = [];\ntry {\n  const data = fs.readFileSync(file, 'utf8');\n  existing = JSON.parse(data);\n} catch(e) {}\n\nconst existingIds = new Set(existing.map(j => j.id));\nconst newJobs = jobs.filter(j => !existingIds.has(j.id));\nconst merged = [...existing, ...newJobs];\n\nfs.writeFileSync(file, JSON.stringify(merged, null, 2));\n\nreturn [{ json: { saved: newJobs.length, total: merged.length, file } }];"
+      },
+      "id": "dedup-save-1",
+      "name": "Deduplicate & Save",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 500]
+    }
+  ],
+  "connections": {
+    "Every 12 Hours": {
+      "main": [[{ "node": "Scrape Job Boards", "type": "main", "index": 0 }]]
+    },
+    "Scrape Job Boards": {
+      "main": [[{ "node": "Check Results", "type": "main", "index": 0 }]]
+    },
+    "Check Results": {
+      "main": [[{ "node": "Fetch JD Text", "type": "main", "index": 0 }]]
+    },
+    "Fetch JD Text": {
+      "main": [[{ "node": "Score Fitment (Claude Haiku)", "type": "main", "index": 0 }]]
+    },
+    "Score Fitment (Claude Haiku)": {
+      "main": [[{ "node": "Filter >= 72% Fitment", "type": "main", "index": 0 }]]
+    },
+    "Filter >= 72% Fitment": {
+      "main": [[
+        { "node": "Build HTML Digest", "type": "main", "index": 0 },
+        { "node": "Deduplicate & Save", "type": "main", "index": 0 }
+      ]]
+    },
+    "Build HTML Digest": {
+      "main": [[{ "node": "Send Email Digest", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": [{ "name": "job-hunter" }]
+}
