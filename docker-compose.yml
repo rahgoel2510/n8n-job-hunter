@@ -12,6 +12,7 @@ services:
       - N8N_HOST=localhost
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - SMTP_HOST=${SMTP_HOST:-smtp-mail.outlook.com}
       - SMTP_PORT=${SMTP_PORT:-587}
