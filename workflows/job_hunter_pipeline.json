@@ -4,250 +4,123 @@
     {
       "parameters": {
         "rule": {
-          "interval": [
-            {
-              "field": "hours",
-              "hoursInterval": 12
-            }
-          ]
+          "interval": [{ "field": "hours", "hoursInterval": 12 }]
         }
       },
       "id": "trigger-1",
       "name": "Every 12 Hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        200,
-        300
-      ]
+      "position": [200, 300]
     },
     {
       "parameters": {
-        "jsCode": "const queries = [\n  'Staff TPM India',\n  'Senior TPM India',\n  'Engineering Program Manager India',\n  'GenAI Program Manager India',\n  'Principal Program Manager India'\n];\n\nconst sources = ['indeed', 'linkedin'];\nconst jobs = [];\nconst seen = new Set();\n\nfor (const source of sources) {\n  for (const query of queries) {\n    let url;\n    if (source === 'indeed') {\n      url = `https://www.indeed.co.in/jobs?q=${encodeURIComponent(query)}&l=India&sort=date&fromage=1`;\n    } else {\n      url = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=India&f_TPR=r86400`;\n    }\n    try {\n      const response = await this.helpers.httpRequest({ method: 'GET', url, headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }, timeout: 15000 });\n      const html = response;\n      let matches;\n      if (source === 'indeed') {\n        const regex = /data-jk=\"([^\"]+)\"[\\s\\S]*?<h2[^>]*>\\s*<a[^>]*>\\s*<span[^>]*>([^<]+)<\\/span>[\\s\\S]*?<span[^>]*data-testid=\"company-name\"[^>]*>([^<]+)<\\/span>/g;\n        while ((matches = regex.exec(html)) !== null) {\n          const id = `indeed_${matches[1]}`;\n          if (!seen.has(id)) { seen.add(id); jobs.push({ id, source: 'indeed', title: matches[2].trim(), company: matches[3].trim(), url: `https://www.indeed.co.in/viewjob?jk=${matches[1]}`, query, scraped_at: new Date().toISOString() }); }\n        }\n      } else {\n        const regex = /data-entity-urn=\"urn:li:jobPosting:(\\d+)\"[\\s\\S]*?<span[^>]*>([^<]+)<\\/span>[\\s\\S]*?<h4[^>]*>([^<]+)<\\/h4>/g;\n        while ((matches = regex.exec(html)) !== null) {\n          const id = `linkedin_${matches[1]}`;\n          if (!seen.has(id)) { seen.add(id); jobs.push({ id, source: 'linkedin', title: matches[2].trim(), company: matches[3].trim(), url: `https://www.linkedin.com/jobs/view/${matches[1]}`, query, scraped_at: new Date().toISOString() }); }\n        }\n      }\n    } catch (e) {}\n  }\n}\nreturn jobs.length > 0 ? jobs.map(j => ({ json: j })) : [{ json: { _noResults: true, source: 'job_boards' } }];"
+        "jsCode": "// Scrape all sources: Indeed, LinkedIn, and company career page APIs\nconst jobs = [];\nconst seen = new Set();\n\n// --- Indeed + LinkedIn ---\nconst queries = ['Staff TPM India','Senior TPM India','Engineering Program Manager India','GenAI Program Manager India','Principal Program Manager India'];\nfor (const query of queries) {\n  for (const source of ['indeed', 'linkedin']) {\n    let url = source === 'indeed'\n      ? `https://www.indeed.co.in/jobs?q=${encodeURIComponent(query)}&l=India&sort=date&fromage=1`\n      : `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=India&f_TPR=r86400`;\n    try {\n      const html = await this.helpers.httpRequest({ method: 'GET', url, headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }, timeout: 15000 });\n      let m;\n      if (source === 'indeed') {\n        const re = /data-jk=\"([^\"]+)\"[\\s\\S]*?<h2[^>]*>\\s*<a[^>]*>\\s*<span[^>]*>([^<]+)<\\/span>[\\s\\S]*?<span[^>]*data-testid=\"company-name\"[^>]*>([^<]+)<\\/span>/g;\n        while ((m = re.exec(html)) !== null) { const id = `indeed_${m[1]}`; if (!seen.has(id)) { seen.add(id); jobs.push({ id, source:'indeed', title:m[2].trim(), company:m[3].trim(), url:`https://www.indeed.co.in/viewjob?jk=${m[1]}`, scraped_at:new Date().toISOString() }); } }\n      } else {\n        const re = /data-entity-urn=\"urn:li:jobPosting:(\\d+)\"[\\s\\S]*?<span[^>]*>([^<]+)<\\/span>[\\s\\S]*?<h4[^>]*>([^<]+)<\\/h4>/g;\n        while ((m = re.exec(html)) !== null) { const id = `li_${m[1]}`; if (!seen.has(id)) { seen.add(id); jobs.push({ id, source:'linkedin', title:m[2].trim(), company:m[3].trim(), url:`https://www.linkedin.com/jobs/view/${m[1]}`, scraped_at:new Date().toISOString() }); } }\n      }\n    } catch(e) {}\n  }\n}\n\n// --- Amazon Jobs API ---\ntry {\n  for (const q of ['Technical Program Manager','Staff Program Manager','GenAI Program Manager']) {\n    const data = await this.helpers.httpRequest({ method:'GET', url:`https://www.amazon.jobs/en/search.json?base_query=${encodeURIComponent(q)}&loc_query=India&country=IND&offset=0&result_limit=25`, timeout:15000 });\n    for (const j of (data.jobs||[])) { const id=`amzn_${j.id_icims}`; if(!seen.has(id)){seen.add(id); jobs.push({id, source:'amazon_careers', title:j.title, company:'Amazon', url:`https://www.amazon.jobs/en/jobs/${j.id_icims}`, scraped_at:new Date().toISOString()});} }\n  }\n} catch(e){}\n\n// --- Atlassian API ---\ntry {\n  const data = await this.helpers.httpRequest({ method:'GET', url:'https://www.atlassian.com/endpoint/careers/listings?location=India', timeout:15000 });\n  const kw = ['program manager','tpm','technical program'];\n  for (const j of data) {\n    const url = j.portalJobPost?.portalUrl||'';\n    const title = decodeURIComponent(url.split('/').slice(-2)[0]||'').replace(/-/g,' ');\n    if (kw.some(k=>title.toLowerCase().includes(k))) { const id=`atl_${j.id}`; if(!seen.has(id)){seen.add(id); jobs.push({id, source:'atlassian_careers', title, company:'Atlassian', url, scraped_at:new Date().toISOString()});} }\n  }\n} catch(e){}\n\n// --- Greenhouse Boards API ---\nconst boards = [{board:'stripe',company:'Stripe'},{board:'uber',company:'Uber'},{board:'phonepe',company:'PhonePe'},{board:'razorpay',company:'Razorpay'},{board:'guidewire',company:'Guidewire'}];\nfor (const {board,company} of boards) {\n  try {\n    const data = await this.helpers.httpRequest({ method:'GET', url:`https://boards-api.greenhouse.io/v1/boards/${board}/jobs`, timeout:10000 });\n    for (const j of (data.jobs||[])) {\n      const t=j.title||''; const loc=j.location?.name||'';\n      if (['program manager','tpm','technical program'].some(k=>t.toLowerCase().includes(k)) && loc.toLowerCase().match(/india|bengaluru|bangalore|hyderabad|mumbai|pune|remote|asia/)) {\n        const id=`gh_${board}_${j.id}`; if(!seen.has(id)){seen.add(id); jobs.push({id, source:`${company.toLowerCase()}_careers`, title:t, company, url:j.absolute_url, scraped_at:new Date().toISOString()});}\n      }\n    }\n  } catch(e){}\n}\n\nif (jobs.length === 0) return [{json:{_empty:true, message:'No jobs found this run'}}];\nreturn jobs.map(j=>({json:j}));"
       },
-      "id": "scrape-1",
-      "name": "Scrape Job Boards",
+      "id": "scrape-all-1",
+      "name": "Scrape All Sources",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        420,
-        200
-      ]
+      "position": [440, 300]
     },
     {
       "parameters": {
-        "jsCode": "// Scrape company career pages via their JSON APIs (not HTML - these are SPAs)\nconst jobs = [];\nconst seen = new Set();\nconst keywords = ['program manager', 'tpm', 'technical program', 'genai', 'staff'];\n\n// --- Amazon Jobs API (confirmed working) ---\ntry {\n  for (const q of ['Technical Program Manager', 'Staff Program Manager', 'GenAI Program Manager']) {\n    const data = await this.helpers.httpRequest({\n      method: 'GET',\n      url: `https://www.amazon.jobs/en/search.json?base_query=${encodeURIComponent(q)}&loc_query=India&country=IND&offset=0&result_limit=25`,\n      timeout: 15000\n    });\n    for (const j of (data.jobs || [])) {\n      const id = `amazon_${j.id_icims}`;\n      if (!seen.has(id)) {\n        seen.add(id);\n        jobs.push({ id, source: 'amazon_careers', title: j.title, company: j.company_name || 'Amazon', url: `https://www.amazon.jobs/en/jobs/${j.id_icims}`, location: j.normalized_location || j.location, query: q, scraped_at: new Date().toISOString() });\n      }\n    }\n  }\n} catch(e) {}\n\n// --- Atlassian Careers API (confirmed working) ---\ntry {\n  const data = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://www.atlassian.com/endpoint/careers/listings?location=India',\n    timeout: 15000\n  });\n  for (const j of data) {\n    const url = j.portalJobPost?.portalUrl || '';\n    const titleSlug = url.split('/').slice(-2)[0] || '';\n    const title = decodeURIComponent(titleSlug).replace(/-/g, ' ').replace(/%2c/gi, ',');\n    if (keywords.some(k => title.toLowerCase().includes(k))) {\n      const id = `atlassian_${j.id}`;\n      if (!seen.has(id)) {\n        seen.add(id);\n        jobs.push({ id, source: 'atlassian_careers', title, company: 'Atlassian', url, query: 'career_page', scraped_at: new Date().toISOString() });\n      }\n    }\n  }\n} catch(e) {}\n\n// --- Greenhouse Boards API (Stripe, Uber, etc.) ---\nconst greenhouseBoards = [\n  { board: 'stripe', company: 'Stripe' },\n  { board: 'uber', company: 'Uber' },\n  { board: 'phonepe', company: 'PhonePe' },\n  { board: 'swiggy', company: 'Swiggy' },\n  { board: 'razorpay', company: 'Razorpay' },\n  { board: 'savabordeaux', company: 'Saviynt' },\n  { board: 'guidewire', company: 'Guidewire' }\n];\n\nfor (const { board, company } of greenhouseBoards) {\n  try {\n    const data = await this.helpers.httpRequest({\n      method: 'GET',\n      url: `https://boards-api.greenhouse.io/v1/boards/${board}/jobs`,\n      timeout: 10000\n    });\n    for (const j of (data.jobs || [])) {\n      const title = j.title || '';\n      if (keywords.some(k => title.toLowerCase().includes(k))) {\n        const loc = j.location?.name || '';\n        if (loc.toLowerCase().match(/india|bengaluru|bangalore|hyderabad|mumbai|delhi|pune|remote|asia/)) {\n          const id = `gh_${board}_${j.id}`;\n          if (!seen.has(id)) {\n            seen.add(id);\n            jobs.push({ id, source: `${company.toLowerCase()}_careers`, title, company, url: j.absolute_url, location: loc, query: 'career_page', scraped_at: new Date().toISOString() });\n          }\n        }\n      }\n    }\n  } catch(e) {}\n}\n\n// --- Google Careers (public listings page, extract from script tags) ---\ntry {\n  const html = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://www.google.com/about/careers/applications/jobs/results?q=Technical%20Program%20Manager&location=India',\n    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },\n    timeout: 15000\n  });\n  const jsonMatch = html.match(/AF_initDataCallback\\([^)]*data:([\\s\\S]*?)\\}\\);/g);\n  if (jsonMatch) {\n    for (const block of jsonMatch) {\n      const titleMatches = block.matchAll(/\"((?:Senior|Staff|Principal)?\\s*(?:Technical\\s+)?Program\\s+Manager[^\"]*)\"/gi);\n      for (const m of titleMatches) {\n        const title = m[1];\n        const id = `google_${Buffer.from(title).toString('base64').substring(0,12)}`;\n        if (!seen.has(id)) {\n          seen.add(id);\n          jobs.push({ id, source: 'google_careers', title, company: 'Google', url: 'https://www.google.com/about/careers/applications/jobs/results?q=Technical+Program+Manager&location=India', query: 'career_page', scraped_at: new Date().toISOString() });\n        }\n      }\n    }\n  }\n} catch(e) {}\n\n// --- Microsoft Careers ---\ntry {\n  const data = await this.helpers.httpRequest({\n    method: 'GET',\n    url: 'https://gcsservices.careers.microsoft.com/search/api/v1/search?q=Technical%20Program%20Manager&lc=India&p=1&pg=20&o=Recent&flt=true',\n    headers: { 'User-Agent': 'Mozilla/5.0' },\n    timeout: 15000\n  });\n  const msJobs = data?.operationResult?.result?.jobs || [];\n  for (const j of msJobs) {\n    const id = `msft_${j.jobId}`;\n    if (!seen.has(id)) {\n      seen.add(id);\n      jobs.push({ id, source: 'microsoft_careers', title: j.title, company: 'Microsoft', url: `https://careers.microsoft.com/global/en/job/${j.jobId}`, location: j.properties?.primaryLocation || '', query: 'career_page', scraped_at: new Date().toISOString() });\n    }\n  }\n} catch(e) {}\n\nreturn jobs.length > 0 ? jobs.map(j => ({ json: j })) : [{ json: { _noResults: true, source: 'career_pages' } }];"
-      },
-      "id": "scrape-careers-1",
-      "name": "Scrape Career Pages",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        420,
-        500
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const items = $input.all().map(i => i.json).filter(j => !j._noResults);\nif (items.length === 0) {\n  return [{ json: { _empty: true, message: 'No jobs found this run' } }];\n}\nreturn items.map(j => ({ json: j }));"
-      },
-      "id": "merge-1",
-      "name": "Merge All Jobs",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        660,
-        350
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const job = $input.item.json;\nif (job._empty) return [{ json: job }];\n\nlet jdText = '';\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: job.url,\n    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },\n    timeout: 15000\n  });\n  jdText = response.replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').substring(0, 3000);\n} catch (e) {\n  jdText = `Title: ${job.title}, Company: ${job.company}`;\n}\nreturn [{ json: { ...job, jd_text: jdText } }];"
+        "jsCode": "const job = $input.item.json;\nif (job._empty) return [{ json: job }];\nlet jdText = '';\ntry {\n  const response = await this.helpers.httpRequest({ method:'GET', url:job.url, headers:{'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}, timeout:15000 });\n  jdText = response.replace(/<[^>]+>/g,' ').replace(/\\s+/g,' ').substring(0,3000);\n} catch(e) { jdText = `Title: ${job.title}, Company: ${job.company}`; }\nreturn [{json:{...job, jd_text:jdText}}];"
       },
       "id": "fetch-jd-1",
       "name": "Fetch JD Text",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        880,
-        350
-      ]
+      "position": [680, 300]
     },
     {
       "parameters": {
-        "jsCode": "const job = $input.item.json;\nif (job._empty) return [{ json: job }];\n\nconst profile = `Rahul Goel - Staff TPM, 20 years experience.\nRecent: Amazon India - $165M AWS portfolio, GDPR compliance, GenAI delivery (AskGenie 88% autonomous resolution, Procurement Advisor $2.3M ROI), $5.3B Capital Planning, $8M FinOps savings, EagleEye observability (Datadog, Prometheus), 10+ Senior Engineers managed.\nPrior: Deloitte Digital 7 years 45-member teams, Marketo Engage ML automation 2.5x ROI.\nTech: AWS, Bedrock Agents, RAG, LLMOps, LangChain, OAuth 2.0, GDPR, SOC2, Datadog, Terraform, Kubernetes, Docker, Java, Python, SQL, Agile, SAFe, OKR, JIRA.\nCerts: PMP, AWS Solutions Architect, Google Cloud Gen AI Leader.`;\n\nconst prompt = `You are a job fitment scoring engine. Score how well this candidate matches the job.\n\nCandidate Profile:\n${profile}\n\nJob:\nTitle: ${job.title}\nCompany: ${job.company}\nDescription: ${job.jd_text}\n\nRespond in EXACTLY this JSON format (no markdown, no explanation):\n{\"score\": <0-100>, \"top_matches\": [\"match1\", \"match2\", \"match3\"], \"gaps\": [\"gap1\", \"gap2\"], \"resume_version\": \"<Saviynt-focused if role emphasizes security/compliance/IAM, otherwise Guidewire-focused>\"}`;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${$env.GEMINI_API_KEY}`,\n    headers: { 'Content-Type': 'application/json' },\n    body: { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 300 } },\n    timeout: 30000\n  });\n  const text = response.candidates[0].content.parts[0].text;\n  const cleaned = text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  const scoring = JSON.parse(cleaned);\n  return [{ json: { ...job, ...scoring } }];\n} catch (e) {\n  return [{ json: { ...job, score: 0, top_matches: [], gaps: ['Scoring failed'], resume_version: 'Guidewire-focused', error: e.message } }];\n}"
+        "jsCode": "const job = $input.item.json;\nif (job._empty) return [{json:job}];\n\nconst profile = 'Rahul Goel - Staff TPM, 20 years experience. Recent: Amazon India - $165M AWS portfolio, GDPR compliance, GenAI delivery (AskGenie 88% autonomous resolution, Procurement Advisor $2.3M ROI), $5.3B Capital Planning, $8M FinOps savings, EagleEye observability (Datadog, Prometheus), 10+ Senior Engineers managed. Prior: Deloitte Digital 7 years 45-member teams, Marketo Engage ML automation 2.5x ROI. Tech: AWS, Bedrock Agents, RAG, LLMOps, LangChain, OAuth 2.0, GDPR, SOC2, Datadog, Terraform, Kubernetes, Docker, Java, Python, SQL, Agile, SAFe, OKR, JIRA. Certs: PMP, AWS Solutions Architect, Google Cloud Gen AI Leader.';\n\nconst prompt = `Score how well this candidate matches the job (0-100). Candidate: ${profile} Job: ${job.title} at ${job.company}. Description: ${job.jd_text}. Respond ONLY with JSON: {\"score\":<0-100>,\"top_matches\":[\"a\",\"b\",\"c\"],\"gaps\":[\"x\",\"y\"],\"resume_version\":\"Saviynt-focused or Guidewire-focused\"}`;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method:'POST',\n    url:`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${$env.GEMINI_API_KEY}`,\n    headers:{'Content-Type':'application/json'},\n    body:{contents:[{parts:[{text:prompt}]}], generationConfig:{temperature:0.1,maxOutputTokens:300}},\n    timeout:30000\n  });\n  const text = response.candidates[0].content.parts[0].text;\n  const cleaned = text.replace(/```json\\n?/g,'').replace(/```\\n?/g,'').trim();\n  const scoring = JSON.parse(cleaned);\n  return [{json:{...job,...scoring}}];\n} catch(e) {\n  return [{json:{...job, score:0, top_matches:[], gaps:['Scoring failed'], resume_version:'Guidewire-focused', error:e.message}}];\n}"
       },
       "id": "score-1",
       "name": "Score Fitment (Gemini Flash)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1100,
-        350
-      ]
+      "position": [920, 300]
     },
     {
       "parameters": {
-        "jsCode": "// BATCH filter - always returns at least 1 item so downstream nodes execute\nconst items = $input.all().map(i => i.json);\nconst matched = items.filter(j => !j._empty && j.score >= 72);\nif (matched.length === 0) {\n  return [{ json: { _noMatches: true, message: `No jobs above 72% fitment (scored ${items.filter(j => !j._empty).length} roles)` } }];\n}\nreturn matched.map(j => ({ json: j }));"
+        "jsCode": "const items = $input.all().map(i=>i.json);\nconst matched = items.filter(j=>!j._empty && j.score >= 72);\nif (matched.length === 0) return [{json:{_noMatches:true, message:`No jobs above 72% fitment (scored ${items.filter(j=>!j._empty).length} roles)`}}];\nreturn matched.map(j=>({json:j}));"
       },
       "id": "filter-1",
       "name": "Filter >= 72% Fitment",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1320,
-        350
-      ]
+      "position": [1160, 300]
     },
     {
       "parameters": {
-        "jsCode": "const items = $input.all().map(i => i.json);\nconst jobs = items.filter(j => !j._noMatches && !j._empty);\n\nif (jobs.length === 0) {\n  const msg = items[0]?.message || 'No matching jobs';\n  return [{ json: { html: `<p>${msg}</p>`, count: 0 } }];\n}\n\njobs.sort((a, b) => b.score - a.score);\nconst rows = jobs.map(j => `<tr>\n  <td style=\"padding:8px;border:1px solid #ddd;font-weight:bold;color:#1a73e8\">${j.score}%</td>\n  <td style=\"padding:8px;border:1px solid #ddd\">${j.company}</td>\n  <td style=\"padding:8px;border:1px solid #ddd\"><a href=\"${j.url}\">${j.title}</a></td>\n  <td style=\"padding:8px;border:1px solid #ddd\">${j.source}</td>\n  <td style=\"padding:8px;border:1px solid #ddd\">${(j.top_matches||[]).join(', ')}</td>\n  <td style=\"padding:8px;border:1px solid #ddd;color:#d93025\">${(j.gaps||[]).join(', ')}</td>\n  <td style=\"padding:8px;border:1px solid #ddd\">${j.resume_version||'Guidewire-focused'}</td>\n</tr>`).join('');\n\nconst html = `<h2 style=\"color:#1a73e8\">\\ud83c\\udfaf Job Hunter Digest - ${new Date().toLocaleDateString('en-IN')}</h2>\n<p>${jobs.length} roles matched (\\u226572% fitment)</p>\n<table style=\"border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:14px\">\n<tr style=\"background:#1a73e8;color:white\"><th style=\"padding:8px\">Score</th><th style=\"padding:8px\">Company</th><th style=\"padding:8px\">Title</th><th style=\"padding:8px\">Source</th><th style=\"padding:8px\">Matches</th><th style=\"padding:8px\">Gaps</th><th style=\"padding:8px\">Resume</th></tr>\n${rows}</table>\n<p style=\"color:#666;font-size:12px\">Generated by n8n-job-hunter | ${new Date().toISOString()}</p>`;\n\nreturn [{ json: { html, count: jobs.length } }];"
+        "jsCode": "const items = $input.all().map(i=>i.json);\nconst jobs = items.filter(j=>!j._noMatches && !j._empty);\nif (jobs.length===0) { return [{json:{html:`<p>${items[0]?.message||'No matching jobs'}</p>`,count:0}}]; }\njobs.sort((a,b)=>b.score-a.score);\nconst rows = jobs.map(j=>`<tr><td style=\"padding:8px;border:1px solid #ddd;font-weight:bold;color:#1a73e8\">${j.score}%</td><td style=\"padding:8px;border:1px solid #ddd\">${j.company}</td><td style=\"padding:8px;border:1px solid #ddd\"><a href=\"${j.url}\">${j.title}</a></td><td style=\"padding:8px;border:1px solid #ddd\">${j.source}</td><td style=\"padding:8px;border:1px solid #ddd\">${(j.top_matches||[]).join(', ')}</td><td style=\"padding:8px;border:1px solid #ddd;color:#d93025\">${(j.gaps||[]).join(', ')}</td><td style=\"padding:8px;border:1px solid #ddd\">${j.resume_version||'Guidewire-focused'}</td></tr>`).join('');\nconst html = `<h2 style=\"color:#1a73e8\">🎯 Job Hunter Digest - ${new Date().toLocaleDateString('en-IN')}</h2><p>${jobs.length} roles matched (≥72% fitment)</p><table style=\"border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:14px\"><tr style=\"background:#1a73e8;color:white\"><th style=\"padding:8px\">Score</th><th style=\"padding:8px\">Company</th><th style=\"padding:8px\">Title</th><th style=\"padding:8px\">Source</th><th style=\"padding:8px\">Matches</th><th style=\"padding:8px\">Gaps</th><th style=\"padding:8px\">Resume</th></tr>${rows}</table><p style=\"color:#666;font-size:12px\">Generated by n8n-job-hunter | ${new Date().toISOString()}</p>`;\nreturn [{json:{html,count:jobs.length}}];"
       },
       "id": "digest-1",
       "name": "Build HTML Digest",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1540,
-        350
-      ]
+      "position": [1400, 300]
     },
     {
       "parameters": {
-        "jsCode": "const html = $input.item.json.html;\nconst count = $input.item.json.count;\nconst subject = `🎯 Job Hunter: ${count} roles matched - ${new Date().toLocaleDateString('en-IN')}`;\nconst from = $env.SMTP_FROM || $env.SMTP_USER;\nconst to = $env.SMTP_TO;\nconst user = $env.SMTP_USER;\nconst pass = $env.SMTP_PASSWORD;\nconst host = $env.SMTP_HOST || 'smtp-mail.outlook.com';\nconst port = $env.SMTP_PORT || '587';\n\n// Use net and tls to send SMTP directly (no external modules)\nconst net = require('net');\nconst tls = require('tls');\nconst { Buffer } = require('buffer');\n\nfunction sendSmtp() {\n  return new Promise((resolve, reject) => {\n    const socket = net.createConnection(parseInt(port), host);\n    let upgraded = false;\n    let stream = socket;\n    const lines = [];\n    let buffer = '';\n\n    const mimeMsg = [\n      `From: ${from}`,\n      `To: ${to}`,\n      `Subject: ${subject}`,\n      `MIME-Version: 1.0`,\n      `Content-Type: text/html; charset=utf-8`,\n      `Date: ${new Date().toUTCString()}`,\n      '',\n      html,\n    ].join('\\r\\n');\n\n    const commands = [\n      { wait: '220', send: `EHLO localhost\\r\\n` },\n      { wait: '250', send: `STARTTLS\\r\\n` },\n      { wait: '220', tls: true },\n      { wait: '250', send: `EHLO localhost\\r\\n` },\n      { wait: '250', send: `AUTH LOGIN\\r\\n` },\n      { wait: '334', send: Buffer.from(user).toString('base64') + '\\r\\n' },\n      { wait: '334', send: Buffer.from(pass).toString('base64') + '\\r\\n' },\n      { wait: '235', send: `MAIL FROM:<${from}>\\r\\n` },\n      { wait: '250', send: `RCPT TO:<${to}>\\r\\n` },\n      { wait: '250', send: `DATA\\r\\n` },\n      { wait: '354', send: mimeMsg + '\\r\\n.\\r\\n' },\n      { wait: '250', send: `QUIT\\r\\n` },\n    ];\n\n    let step = 0;\n\n    function processLine(line) {\n      const cmd = commands[step];\n      if (!cmd) return;\n      if (line.startsWith(cmd.wait)) {\n        step++;\n        const next = commands[step];\n        if (!next) { resolve(); stream.end(); return; }\n        if (next.tls) {\n          const tlsSocket = tls.connect({ socket, host, servername: host }, () => {\n            stream = tlsSocket;\n            step++;\n            const afterTls = commands[step];\n            if (afterTls && afterTls.send) stream.write(afterTls.send);\n            tlsSocket.on('data', onData);\n          });\n          socket.removeAllListeners('data');\n          return;\n        }\n        if (next.send) stream.write(next.send);\n      } else if (line.match(/^[45]/)) {\n        reject(new Error(`SMTP error at step ${step}: ${line}`));\n        stream.end();\n      }\n    }\n\n    function onData(chunk) {\n      buffer += chunk.toString();\n      const parts = buffer.split('\\r\\n');\n      buffer = parts.pop();\n      for (const line of parts) {\n        if (line) processLine(line);\n      }\n    }\n\n    socket.on('data', onData);\n    socket.on('error', reject);\n    socket.setTimeout(30000, () => { reject(new Error('SMTP timeout')); socket.end(); });\n  });\n}\n\ntry {\n  await sendSmtp();\n  return [{ json: { sent: true, to, count } }];\n} catch(e) {\n  return [{ json: { sent: false, error: e.message, to, count } }];\n}"
+        "fromEmail": "rahul.g2510@outlook.com",
+        "toEmail": "rahul.g2510@outlook.com",
+        "subject": "=🎯 Job Hunter: {{ $json.count }} roles matched - {{ new Date().toLocaleDateString('en-IN') }}",
+        "emailType": "html",
+        "html": "={{ $json.html }}",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
       },
       "id": "email-1",
       "name": "Send Email Digest",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1760,
-        350
-      ]
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1640, 300],
+      "credentials": {
+        "smtp": {
+          "id": "1",
+          "name": "Outlook SMTP"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "const items = $input.all().map(i => i.json).filter(j => !j._noMatches && !j._empty && j.score);\nconst fs = require('fs');\nconst outDir = '/home/node/outputs';\nconst date = new Date().toISOString().split('T')[0];\nconst file = `${outDir}/jobs_${date}.json`;\n\nlet existing = [];\ntry { existing = JSON.parse(fs.readFileSync(file, 'utf8')); } catch(e) {}\n\nconst existingIds = new Set(existing.map(j => j.id));\nconst newJobs = items.filter(j => !existingIds.has(j.id));\nconst merged = [...existing, ...newJobs];\nfs.writeFileSync(file, JSON.stringify(merged, null, 2));\n\nreturn [{ json: { saved: newJobs.length, total: merged.length, file } }];"
+        "jsCode": "const items = $input.all().map(i=>i.json).filter(j=>!j._noMatches && !j._empty && j.score);\nconst fs = require('fs');\nconst outDir = '/home/node/outputs';\nconst date = new Date().toISOString().split('T')[0];\nconst file = `${outDir}/jobs_${date}.json`;\nlet existing = [];\ntry { existing = JSON.parse(fs.readFileSync(file,'utf8')); } catch(e){}\nconst existingIds = new Set(existing.map(j=>j.id));\nconst newJobs = items.filter(j=>!existingIds.has(j.id));\nconst merged = [...existing,...newJobs];\nfs.writeFileSync(file, JSON.stringify(merged,null,2));\nreturn [{json:{saved:newJobs.length, total:merged.length, file}}];"
       },
       "id": "dedup-save-1",
       "name": "Deduplicate & Save",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1540,
-        550
-      ]
+      "position": [1400, 500]
     }
   ],
   "connections": {
     "Every 12 Hours": {
-      "main": [
-        [
-          {
-            "node": "Scrape Job Boards",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Scrape Career Pages",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Scrape All Sources", "type": "main", "index": 0 }]]
     },
-    "Scrape Job Boards": {
-      "main": [
-        [
-          {
-            "node": "Merge All Jobs",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Scrape Career Pages": {
-      "main": [
-        [
-          {
-            "node": "Merge All Jobs",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Merge All Jobs": {
-      "main": [
-        [
-          {
-            "node": "Fetch JD Text",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Scrape All Sources": {
+      "main": [[{ "node": "Fetch JD Text", "type": "main", "index": 0 }]]
     },
     "Fetch JD Text": {
-      "main": [
-        [
-          {
-            "node": "Score Fitment (Gemini Flash)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Score Fitment (Gemini Flash)", "type": "main", "index": 0 }]]
     },
     "Score Fitment (Gemini Flash)": {
-      "main": [
-        [
-          {
-            "node": "Filter >= 72% Fitment",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Filter >= 72% Fitment", "type": "main", "index": 0 }]]
     },
     "Filter >= 72% Fitment": {
-      "main": [
-        [
-          {
-            "node": "Build HTML Digest",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Deduplicate & Save",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[
+        { "node": "Build HTML Digest", "type": "main", "index": 0 },
+        { "node": "Deduplicate & Save", "type": "main", "index": 0 }
+      ]]
     },
     "Build HTML Digest": {
-      "main": [
-        [
-          {
-            "node": "Send Email Digest",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Send Email Digest", "type": "main", "index": 0 }]]
     }
   },
-  "settings": {
-    "executionOrder": "v1",
-    "saveManualExecutions": true,
-    "callerPolicy": "workflowsFromSameOwner"
-  },
-  "tags": [
-    {
-      "name": "job-hunter"
-    }
-  ],
+  "settings": { "executionOrder": "v1", "saveManualExecutions": true, "callerPolicy": "workflowsFromSameOwner" },
+  "tags": [{ "name": "job-hunter" }],
   "id": "1"
 }
