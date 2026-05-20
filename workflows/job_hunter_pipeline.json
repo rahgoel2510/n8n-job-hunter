@@ -75,10 +75,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const job = $input.item.json;\nif (job._empty) return [{ json: job }];\n\nconst profile = `Rahul Goel - Staff TPM, 20 years experience.\nRecent: Amazon India - $165M AWS portfolio, GDPR compliance, GenAI delivery (AskGenie 88% autonomous resolution, Procurement Advisor $2.3M ROI), $5.3B Capital Planning, $8M FinOps savings, EagleEye observability (Datadog, Prometheus), 10+ Senior Engineers managed.\nPrior: Deloitte Digital 7 years 45-member teams, Marketo Engage ML automation 2.5x ROI.\nTech: AWS, Bedrock Agents, RAG, LLMOps, LangChain, OAuth 2.0, GDPR, SOC2, Datadog, Terraform, Kubernetes, Docker, Java, Python, SQL, Agile, SAFe, OKR, JIRA.\nCerts: PMP, AWS Solutions Architect, Google Cloud Gen AI Leader.`;\n\nconst prompt = `You are a job fitment scoring engine. Score how well this candidate matches the job.\n\nCandidate Profile:\n${profile}\n\nJob:\nTitle: ${job.title}\nCompany: ${job.company}\nDescription: ${job.jd_text}\n\nRespond in EXACTLY this JSON format (no markdown, no explanation):\n{\"score\": <0-100>, \"top_matches\": [\"match1\", \"match2\", \"match3\"], \"gaps\": [\"gap1\", \"gap2\"], \"resume_version\": \"<Saviynt-focused if role emphasizes security/compliance/IAM, otherwise Guidewire-focused>\"}`;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://api.anthropic.com/v1/messages',\n    headers: { 'Content-Type': 'application/json', 'x-api-key': $env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },\n    body: { model: 'claude-3-haiku-20240307', max_tokens: 300, messages: [{ role: 'user', content: prompt }] },\n    timeout: 30000\n  });\n  const scoring = JSON.parse(response.content[0].text);\n  return [{ json: { ...job, ...scoring } }];\n} catch (e) {\n  return [{ json: { ...job, score: 0, top_matches: [], gaps: ['Scoring failed'], resume_version: 'Guidewire-focused', error: e.message } }];\n}"
+        "jsCode": "const job = $input.item.json;\nif (job._empty) return [{ json: job }];\n\nconst profile = `Rahul Goel - Staff TPM, 20 years experience.\nRecent: Amazon India - $165M AWS portfolio, GDPR compliance, GenAI delivery (AskGenie 88% autonomous resolution, Procurement Advisor $2.3M ROI), $5.3B Capital Planning, $8M FinOps savings, EagleEye observability (Datadog, Prometheus), 10+ Senior Engineers managed.\nPrior: Deloitte Digital 7 years 45-member teams, Marketo Engage ML automation 2.5x ROI.\nTech: AWS, Bedrock Agents, RAG, LLMOps, LangChain, OAuth 2.0, GDPR, SOC2, Datadog, Terraform, Kubernetes, Docker, Java, Python, SQL, Agile, SAFe, OKR, JIRA.\nCerts: PMP, AWS Solutions Architect, Google Cloud Gen AI Leader.`;\n\nconst prompt = `You are a job fitment scoring engine. Score how well this candidate matches the job.\n\nCandidate Profile:\n${profile}\n\nJob:\nTitle: ${job.title}\nCompany: ${job.company}\nDescription: ${job.jd_text}\n\nRespond in EXACTLY this JSON format (no markdown, no explanation):\n{\"score\": <0-100>, \"top_matches\": [\"match1\", \"match2\", \"match3\"], \"gaps\": [\"gap1\", \"gap2\"], \"resume_version\": \"<Saviynt-focused if role emphasizes security/compliance/IAM, otherwise Guidewire-focused>\"}`;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${$env.GEMINI_API_KEY}`,\n    headers: { 'Content-Type': 'application/json' },\n    body: { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 300 } },\n    timeout: 30000\n  });\n  const text = response.candidates[0].content.parts[0].text;\n  const cleaned = text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  const scoring = JSON.parse(cleaned);\n  return [{ json: { ...job, ...scoring } }];\n} catch (e) {\n  return [{ json: { ...job, score: 0, top_matches: [], gaps: ['Scoring failed'], resume_version: 'Guidewire-focused', error: e.message } }];\n}"
       },
       "id": "score-1",
-      "name": "Score Fitment (Claude Haiku)",
+      "name": "Score Fitment (Gemini Flash)",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -193,14 +193,14 @@
       "main": [
         [
           {
-            "node": "Score Fitment (Claude Haiku)",
+            "node": "Score Fitment (Gemini Flash)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Score Fitment (Claude Haiku)": {
+    "Score Fitment (Gemini Flash)": {
       "main": [
         [
           {
